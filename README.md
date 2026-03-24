@@ -9,7 +9,7 @@ Uses **systemd socket activation** — the kernel holds the socket open but no p
 ```
 GitHub push
   → GitHub Actions: curl POST /deploy/{project-slug} with secret header
-  → Nginx (port 443, already open) proxies to localhost:5678
+  → Nginx/Apache2 (port 443, already open) proxies to localhost:5678
   → systemd socket wakes hive_deploy.py
   → Secret validated
   → Deploy commands run (git pull, npm build, copy to serve dir)
@@ -18,12 +18,35 @@ GitHub push
 
 No SSH. No open ports beyond 443. No always-running process.
 
-## Server setup
+---
+
+## Install on a new server (one command)
+
+```bash
+bash <(curl -sSL https://raw.githubusercontent.com/HiveMind-Network-Ltd/hive-deploy/main/setup/bootstrap.sh)
+```
+
+The bootstrap script will:
+
+1. Clone this repo to `~/hive-deploy`
+2. Walk you through configuring one or more deploy projects (slug, secret, repo path, commands)
+3. Write `config.json`
+4. Install and start the systemd socket unit
+5. Auto-detect Nginx or Apache2 and insert the proxy location block into your active site config
+6. Print GitHub Actions snippets for each project you configured
+
+**Requirements:** `git`, `python3`, `sudo`, `openssl` — all present by default on Ubuntu.
+
+---
+
+## Manual server setup
+
+If you prefer to configure things step by step:
 
 ### 1. Clone onto the server
 
 ```bash
-cd /home/ubuntu
+cd ~
 git clone https://github.com/HiveMind-Network-Ltd/hive-deploy.git
 cd hive-deploy
 ```
@@ -37,30 +60,35 @@ bash setup/install.sh
 ### 3. Edit config.json
 
 ```bash
-nano /home/ubuntu/hive-deploy/config.json
+nano ~/hive-deploy/config.json
 ```
 
 Add your projects, paths, and secrets (see `config.example.json`).
 
-### 4. Add Nginx location block
+### 4. Add the web server proxy block
 
-Add the contents of `setup/nginx-location.conf` inside your existing `server {}` block:
+**Nginx** — add the contents of `setup/nginx-location.conf` inside your existing `server {}` block:
 
 ```bash
 sudo nano /etc/nginx/sites-enabled/your-site.conf
+# then:
+sudo nginx -t && sudo systemctl reload nginx
 ```
 
-Then reload Nginx:
+**Apache2** — add the contents of `setup/apache2-proxy.conf` inside your `<VirtualHost>` block:
 
 ```bash
-sudo nginx -t && sudo systemctl reload nginx
+sudo a2enmod proxy proxy_http
+sudo nano /etc/apache2/sites-enabled/your-site.conf
+# then:
+sudo apache2ctl configtest && sudo systemctl reload apache2
 ```
 
 ### 5. Clone your project source onto the server
 
 ```bash
-cd /home/ubuntu
-git clone https://github.com/HiveMind-Network-Ltd/TheHive_Prototype.git live_desk_src
+cd ~
+git clone https://github.com/your-org/your-project.git my_project_src
 ```
 
 ---
