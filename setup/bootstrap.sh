@@ -75,7 +75,25 @@ declare -a PROJECT_SLUGS=()
 declare -a PROJECT_SECRETS=()
 PROJECT_COUNT=0
 
+# Rocket.Chat notification config (global, optional)
+RC_URL="" RC_TOKEN="" RC_USER_ID="" RC_CHANNEL=""
+
 if [ "${SKIP_CONFIG}" -eq 0 ]; then
+  echo ""
+  info "── Rocket.Chat notifications (optional) ──"
+  printf "  Send deploy start / success / failure messages to a Rocket.Chat channel.\n"
+  read -rp "  Configure Rocket.Chat notifications? [y/N]: " _rc
+  if [[ "${_rc}" =~ ^[Yy]$ ]]; then
+    read -rp "  Rocket.Chat URL (e.g. https://rocket.your-domain.com): " RC_URL
+    read -rp "  Personal access token (X-Auth-Token): " RC_TOKEN
+    read -rp "  User ID (X-User-Id): " RC_USER_ID
+    read -rp "  Channel name [github-activities]: " RC_CHANNEL_INPUT
+    RC_CHANNEL="${RC_CHANNEL_INPUT:-github-activities}"
+    success "Rocket.Chat notifications configured."
+  else
+    info "Skipping — you can add a 'notifications' block to config.json later."
+  fi
+
   while true; do
     echo ""
     info "── New project ──"
@@ -206,13 +224,28 @@ if [ "${SKIP_CONFIG}" -eq 0 ]; then
 
   # Write config.json via Python so all values are correctly JSON-encoded
   export PROJECT_COUNT _CONFIG_FILE="${CONFIG_FILE}"
+  export _RC_URL="${RC_URL}" _RC_TOKEN="${RC_TOKEN}" _RC_USER_ID="${RC_USER_ID}" _RC_CHANNEL="${RC_CHANNEL}"
   info "Writing config.json..."
   python3 - << 'PYEOF'
 import json, os
 
 count = int(os.environ['PROJECT_COUNT'])
-config = {'projects': {}}
+config = {}
 
+# Notifications block (only written if all fields are set)
+rc_url     = os.environ.get('_RC_URL', '')
+rc_token   = os.environ.get('_RC_TOKEN', '')
+rc_user_id = os.environ.get('_RC_USER_ID', '')
+rc_channel = os.environ.get('_RC_CHANNEL', '')
+if all([rc_url, rc_token, rc_user_id, rc_channel]):
+    config['notifications'] = {
+        'rc_url':     rc_url,
+        'rc_token':   rc_token,
+        'rc_user_id': rc_user_id,
+        'rc_channel': rc_channel,
+    }
+
+config['projects'] = {}
 for i in range(count):
     slug      = os.environ[f'PROJ_{i}_SLUG']
     secret    = os.environ[f'PROJ_{i}_SECRET']
@@ -280,8 +313,32 @@ header "Web server configuration"
 
 NGINX_ACTIVE=0
 APACHE_ACTIVE=0
+TRAEFIK_ACTIVE=0
+TRAEFIK_CONTAINER=""
+TRAEFIK_DYNAMIC_DIR=""
+DEPLOY_URL=""
+
 systemctl is-active --quiet nginx   2>/dev/null && NGINX_ACTIVE=1  || true
 systemctl is-active --quiet apache2 2>/dev/null && APACHE_ACTIVE=1 || true
+
+# Detect Traefik running inside Docker
+if command -v docker >/dev/null 2>&1; then
+  TRAEFIK_CONTAINER="$(docker ps --format '{{.Names}} {{.Image}}' 2>/dev/null \
+    | grep -i traefik | head -1 | awk '{print $1}')" || true
+  if [ -n "${TRAEFIK_CONTAINER}" ]; then
+    TRAEFIK_ACTIVE=1
+    # Find the host path mounted as /dynamic inside the Traefik container
+    TRAEFIK_DYNAMIC_DIR="$(docker inspect "${TRAEFIK_CONTAINER}" 2>/dev/null \
+      | python3 -c "
+import json, sys
+mounts = json.load(sys.stdin)[0].get('Mounts', [])
+for m in mounts:
+    if m.get('Destination') == '/dynamic':
+        print(m.get('Source', ''))
+        break
+" 2>/dev/null)" || true
+  fi
+fi
 
 # Write a Python patcher script to a temp file and run it with sudo.
 # Using a temp file avoids sudo dropping environment variables and avoids
@@ -454,14 +511,99 @@ PYEOF
   fi
 fi
 
-if [ "${NGINX_ACTIVE}" -eq 0 ] && [ "${APACHE_ACTIVE}" -eq 0 ]; then
-  warn "No active web server (nginx or apache2) detected."
+if [ "${TRAEFIK_ACTIVE}" -eq 1 ]; then
+  info "Traefik detected (container: ${TRAEFIK_CONTAINER}) — auto-configuring..."
+
+  # Confirm or override the dynamic config directory
+  if [ -n "${TRAEFIK_DYNAMIC_DIR}" ]; then
+    info "Found Traefik dynamic config directory: ${TRAEFIK_DYNAMIC_DIR}"
+    read -rp "  Use this directory? [Y/n]: " _td
+    if [[ "${_td}" =~ ^[Nn]$ ]]; then
+      read -rp "  Enter path to Traefik dynamic config directory: " TRAEFIK_DYNAMIC_DIR
+    fi
+  else
+    warn "Could not auto-detect Traefik dynamic config directory."
+    read -rp "  Enter path to Traefik dynamic config directory: " TRAEFIK_DYNAMIC_DIR
+  fi
+
+  # Subdomain
+  while true; do
+    read -rp "  Subdomain for deploy endpoint (e.g. deploy.your-domain.com): " TRAEFIK_DOMAIN
+    [[ -n "${TRAEFIK_DOMAIN}" ]] && break
+    warn "Subdomain cannot be empty."
+  done
+  DEPLOY_URL="https://${TRAEFIK_DOMAIN}"
+
+  # Docker bridge IP — how Traefik reaches the host
+  BRIDGE_IP="$(ip route 2>/dev/null | grep docker0 | awk '{print $9}' | head -1)" || true
+  if [ -z "${BRIDGE_IP}" ]; then
+    BRIDGE_IP="172.17.0.1"
+    warn "Could not auto-detect docker bridge IP, using default ${BRIDGE_IP}."
+    warn "Verify with: ip addr show docker0 | grep inet"
+  else
+    success "Docker bridge IP: ${BRIDGE_IP}"
+  fi
+
+  # Write Traefik dynamic config
+  HIVE_DYNAMIC="${TRAEFIK_DYNAMIC_DIR}/hive-deploy.yml"
+  sudo tee "${HIVE_DYNAMIC}" > /dev/null << YAML
+http:
+  routers:
+    hive-deploy:
+      rule: "Host(\`${TRAEFIK_DOMAIN}\`)"
+      entrypoints:
+        - websecure
+      tls:
+        certresolver: le-http
+      service: hive-deploy-svc
+
+  services:
+    hive-deploy-svc:
+      loadBalancer:
+        servers:
+          - url: "http://${BRIDGE_IP}:5678"
+YAML
+  success "Traefik config written: ${HIVE_DYNAMIC}"
+  info "Traefik will hot-reload this automatically (providers.file.watch=true)."
+
+  # Update socket to listen on all interfaces so Docker can reach it
+  info "Updating socket binding: 127.0.0.1:5678 → 0.0.0.0:5678 (required for Docker→host traffic)..."
+  sudo sed -i 's|ListenStream=127.0.0.1:5678|ListenStream=5678|' "${SYSTEMD_DIR}/hive-deploy.socket"
+  sudo systemctl daemon-reload
+  sudo systemctl restart hive-deploy.socket
+  success "Socket updated and restarted."
+fi
+
+if [ "${NGINX_ACTIVE}" -eq 0 ] && [ "${APACHE_ACTIVE}" -eq 0 ] && [ "${TRAEFIK_ACTIVE}" -eq 0 ]; then
+  warn "No active web server (nginx, apache2, or Traefik) detected."
   echo ""
   echo "  For Nginx — add to your server {} block:"
   printf "\n"; cat "${INSTALL_DIR}/setup/nginx-location.conf"
   echo ""
   echo "  For Apache2 — add inside your <VirtualHost> block:"
   printf "\n"; cat "${INSTALL_DIR}/setup/apache2-proxy.conf"
+  echo ""
+  echo "  For Traefik — create traefik/dynamic/hive-deploy.yml:"
+  cat << 'YAML'
+
+http:
+  routers:
+    hive-deploy:
+      rule: "Host(`deploy.your-domain.com`)"
+      entrypoints:
+        - websecure
+      tls:
+        certresolver: le-http
+      service: hive-deploy-svc
+
+  services:
+    hive-deploy-svc:
+      loadBalancer:
+        servers:
+          - url: "http://172.17.0.1:5678"
+YAML
+  echo ""
+  warn "If using Traefik, also change ListenStream=127.0.0.1:5678 to ListenStream=5678 in ${SYSTEMD_DIR}/hive-deploy.socket"
 fi
 
 # ── 6. Summary ─────────────────────────────────────────────────────────────────
@@ -493,11 +635,12 @@ if [ "${#PROJECT_SLUGS[@]}" -gt 0 ]; then
     printf "  GitHub secret value: %s\n" "${_secret}"
     echo ""
     # The \$ below outputs a literal $ for the GitHub Actions expression
+    _base_url="${DEPLOY_URL:-https://YOUR_DOMAIN}"
     cat << YAML
     - name: Trigger ${_slug} deploy
       run: |
         curl -s -o /dev/null -w "%{http_code}" \
-          -X POST https://YOUR_DOMAIN/deploy/${_slug} \
+          -X POST ${_base_url}/deploy/${_slug} \
           -H "X-Hive-Secret: \${{ secrets.${_secret_name} }}"
 YAML
   done

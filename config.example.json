@@ -1,4 +1,10 @@
 {
+  "notifications": {
+    "rc_url":     "https://rocket.your-domain.com",
+    "rc_token":   "YOUR_PERSONAL_ACCESS_TOKEN",
+    "rc_user_id": "YOUR_USER_ID",
+    "rc_channel": "github-activities"
+  },
   "projects": {
     "thehive-prototype": {
       "secret": "CHANGE_ME_TO_A_STRONG_RANDOM_SECRET",
@@ -14,10 +20,8 @@
       "secret": "ANOTHER_STRONG_RANDOM_SECRET",
       "repo_path": "/home/ubuntu/another_project_src",
       "commands": [
-        "git pull origin master",
-        "npm ci",
-        "npm run build",
-        "cp -r dist/* /home/ubuntu/another_project/"
+        "docker compose pull another-project",
+        "docker compose up -d another-project"
       ]
     }
   }

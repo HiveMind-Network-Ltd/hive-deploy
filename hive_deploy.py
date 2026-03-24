@@ -13,6 +13,8 @@ import os
 import socket
 import subprocess
 import threading
+import urllib.request
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import BaseServer
 from urllib.parse import urlparse
@@ -37,12 +39,59 @@ def load_config():
         return json.load(f)
 
 
-def run_deploy(project_slug, project):
+def _now():
+    return datetime.now(timezone.utc).strftime('%d %b %Y %H:%M UTC')
+
+
+def rc_notify(config, title, text, color='good'):
+    """Post a message to Rocket.Chat via the REST API. Silently skips if not configured."""
+    notif = config.get('notifications', {})
+    url     = notif.get('rc_url', '').rstrip('/')
+    token   = notif.get('rc_token', '')
+    user_id = notif.get('rc_user_id', '')
+    channel = notif.get('rc_channel', '')
+
+    if not all([url, token, user_id, channel]):
+        return
+
+    payload = json.dumps({
+        'channel': channel,
+        'attachments': [{'title': title, 'text': text, 'color': color}],
+    }).encode()
+
+    req = urllib.request.Request(
+        f'{url}/api/v1/chat.postMessage',
+        data=payload,
+        headers={
+            'X-Auth-Token': token,
+            'X-User-Id':    user_id,
+            'Content-Type': 'application/json',
+        },
+        method='POST',
+    )
+    try:
+        urllib.request.urlopen(req, timeout=10)
+    except Exception as e:
+        logging.warning(f'Rocket.Chat notification failed: {e}')
+
+
+def run_deploy(project_slug, project, config):
     repo_path = project.get('repo_path', '')
-    commands = project.get('commands', [])
-    env = {**os.environ, 'HOME': os.path.expanduser('~')}
+    commands  = project.get('commands', [])
+    env       = {**os.environ, 'HOME': os.path.expanduser('~')}
+    hostname  = socket.gethostname()
+    started   = _now()
 
     logging.info(f'[{project_slug}] Deploy started')
+    rc_notify(
+        config,
+        f'🚀 Deploy Started: `{project_slug}`',
+        f'*Server:* `{hostname}`\n*Started:* {started}',
+    )
+
+    steps_ok   = []
+    failed_cmd = None
+    last_output = ''
 
     for cmd in commands:
         logging.info(f'[{project_slug}] $ {cmd}')
@@ -53,17 +102,42 @@ def run_deploy(project_slug, project):
             text=True,
             env=env,
         )
-        if result.stdout.strip():
-            logging.info(f'[{project_slug}] {result.stdout.strip()}')
-        if result.stderr.strip():
-            logging.warning(f'[{project_slug}] stderr: {result.stderr.strip()}')
+        stdout = result.stdout.strip()
+        stderr = result.stderr.strip()
+        if stdout:
+            logging.info(f'[{project_slug}] {stdout}')
+            last_output = stdout
+        if stderr:
+            logging.warning(f'[{project_slug}] stderr: {stderr}')
+            last_output = stderr
         if result.returncode != 0:
-            logging.error(
-                f'[{project_slug}] Command failed (exit {result.returncode}): {cmd}'
-            )
-            return
+            failed_cmd = cmd
+            logging.error(f'[{project_slug}] Command failed (exit {result.returncode}): {cmd}')
+            break
+        steps_ok.append(cmd)
 
-    logging.info(f'[{project_slug}] Deploy complete')
+    if failed_cmd:
+        steps_text = '\n'.join(f'✅ `{c}`' for c in steps_ok) or '_(none)_'
+        tail = '\n'.join(last_output.splitlines()[-10:])
+        rc_notify(
+            config,
+            f'❌ Deploy FAILED: `{project_slug}`',
+            f'*Server:* `{hostname}`\n*Started:* {started}\n\n'
+            f'*Steps completed:*\n{steps_text}\n\n'
+            f'*Failed at:* ❌ `{failed_cmd}`\n\n'
+            f'*Last output:*\n```\n{tail}\n```',
+            color='danger',
+        )
+    else:
+        steps_text = '\n'.join(f'✅ `{c}`' for c in steps_ok)
+        rc_notify(
+            config,
+            f'✅ Deploy Complete: `{project_slug}`',
+            f'*Server:* `{hostname}`\n*Completed:* {_now()}\n\n'
+            f'*Steps:*\n{steps_text}',
+            color='good',
+        )
+        logging.info(f'[{project_slug}] Deploy complete')
 
 
 class DeployHandler(BaseHTTPRequestHandler):
@@ -102,7 +176,7 @@ class DeployHandler(BaseHTTPRequestHandler):
 
             thread = threading.Thread(
                 target=run_deploy,
-                args=(project_slug, project),
+                args=(project_slug, project, config),
                 daemon=True,
             )
             thread.start()
