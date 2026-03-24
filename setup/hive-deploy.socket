@@ -1,0 +1,9 @@
+[Unit]
+Description=hive-deploy webhook socket
+
+[Socket]
+ListenStream=127.0.0.1:5678
+Accept=no
+
+[Install]
+WantedBy=sockets.target

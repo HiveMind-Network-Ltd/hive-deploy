@@ -1,0 +1,18 @@
+[Unit]
+Description=hive-deploy webhook server
+After=network.target
+Requires=hive-deploy.socket
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/hive-deploy
+ExecStart=/usr/bin/python3 /home/ubuntu/hive-deploy/hive_deploy.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

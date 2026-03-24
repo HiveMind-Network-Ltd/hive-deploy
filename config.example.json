@@ -1,0 +1,24 @@
+{
+  "projects": {
+    "thehive-prototype": {
+      "secret": "CHANGE_ME_TO_A_STRONG_RANDOM_SECRET",
+      "repo_path": "/home/ubuntu/live_desk_src",
+      "commands": [
+        "git pull origin master",
+        "npm ci",
+        "npm run build",
+        "cp -r dist/* /home/ubuntu/live_desk_app/"
+      ]
+    },
+    "another-project": {
+      "secret": "ANOTHER_STRONG_RANDOM_SECRET",
+      "repo_path": "/home/ubuntu/another_project_src",
+      "commands": [
+        "git pull origin master",
+        "npm ci",
+        "npm run build",
+        "cp -r dist/* /home/ubuntu/another_project/"
+      ]
+    }
+  }
+}
