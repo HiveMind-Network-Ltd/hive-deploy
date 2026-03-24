@@ -9,6 +9,7 @@
     "thehive-prototype": {
       "secret": "CHANGE_ME_TO_A_STRONG_RANDOM_SECRET",
       "repo_path": "/home/ubuntu/live_desk_src",
+      "url": "https://app.your-domain.com",
       "commands": [
         "git pull origin master",
         "npm ci",
@@ -19,6 +20,7 @@
     "another-project": {
       "secret": "ANOTHER_STRONG_RANDOM_SECRET",
       "repo_path": "/home/ubuntu/another_project_src",
+      "url": "https://another.your-domain.com",
       "commands": [
         "docker compose pull another-project",
         "docker compose up -d another-project"

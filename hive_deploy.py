@@ -78,19 +78,24 @@ def rc_notify(config, title, text, color='good'):
 def run_deploy(project_slug, project, config):
     repo_path = project.get('repo_path', '')
     commands  = project.get('commands', [])
+    url       = project.get('url', '')        # optional public URL shown in RC messages
     env       = {**os.environ, 'HOME': os.path.expanduser('~')}
     hostname  = socket.gethostname()
     started   = _now()
 
     logging.info(f'[{project_slug}] Deploy started')
+
+    start_lines = [f'*Host:* `{hostname}`', f'*Started:* {started}']
+    if url:
+        start_lines.append(f'*URL:* {url}')
     rc_notify(
         config,
-        f'🚀 Deploy Started: `{project_slug}`',
-        f'*Server:* `{hostname}`\n*Started:* {started}',
+        f'🚀 `{project_slug}` — new deployment triggered',
+        '\n'.join(start_lines),
     )
 
-    steps_ok   = []
-    failed_cmd = None
+    steps_ok    = []
+    failed_cmd  = None
     last_output = ''
 
     for cmd in commands:
@@ -121,20 +126,25 @@ def run_deploy(project_slug, project, config):
         tail = '\n'.join(last_output.splitlines()[-10:])
         rc_notify(
             config,
-            f'❌ Deploy FAILED: `{project_slug}`',
-            f'*Server:* `{hostname}`\n*Started:* {started}\n\n'
-            f'*Steps completed:*\n{steps_text}\n\n'
+            f'❌ `{project_slug}` — deployment FAILED',
+            f'*Host:* `{hostname}`  |  *Started:* {started}\n\n'
+            f'*Steps completed before failure:*\n{steps_text}\n\n'
             f'*Failed at:* ❌ `{failed_cmd}`\n\n'
             f'*Last output:*\n```\n{tail}\n```',
             color='danger',
         )
     else:
         steps_text = '\n'.join(f'✅ `{c}`' for c in steps_ok)
+        success_lines = [
+            f'*Host:* `{hostname}`  |  *Completed:* {_now()}',
+        ]
+        if url:
+            success_lines.append(f'*Live at:* {url}')
+        success_lines += ['', '*Commands run:*', steps_text]
         rc_notify(
             config,
-            f'✅ Deploy Complete: `{project_slug}`',
-            f'*Server:* `{hostname}`\n*Completed:* {_now()}\n\n'
-            f'*Steps:*\n{steps_text}',
+            f'✅ `{project_slug}` — deployed successfully',
+            '\n'.join(success_lines),
             color='good',
         )
         logging.info(f'[{project_slug}] Deploy complete')

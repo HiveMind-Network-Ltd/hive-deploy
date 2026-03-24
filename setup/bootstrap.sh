@@ -112,6 +112,9 @@ if [ "${SKIP_CONFIG}" -eq 0 ]; then
     read -rp "  Secret [${GEN_SECRET}]: " USER_SECRET
     SECRET="${USER_SECRET:-${GEN_SECRET}}"
 
+    # Public URL (optional — shown in Rocket.Chat notifications)
+    read -rp "  Public URL for this service, blank to skip (e.g. https://finance.grid.hivemindnetwork.com): " PROJ_URL
+
     # Project type: git or docker
     printf "  Project type:\n"
     printf "    [g] Git  (git pull + build commands)\n"
@@ -209,6 +212,7 @@ if [ "${SKIP_CONFIG}" -eq 0 ]; then
     # Export per-project data for Python (handles all escaping correctly)
     export "PROJ_${PROJECT_COUNT}_SLUG=${SLUG}"
     export "PROJ_${PROJECT_COUNT}_SECRET=${SECRET}"
+    export "PROJ_${PROJECT_COUNT}_URL=${PROJ_URL}"
     export "PROJ_${PROJECT_COUNT}_PATH=${REPO_PATH}"
 
     CMD_TMP="$(mktemp)"
@@ -249,15 +253,19 @@ config['projects'] = {}
 for i in range(count):
     slug      = os.environ[f'PROJ_{i}_SLUG']
     secret    = os.environ[f'PROJ_{i}_SECRET']
+    url       = os.environ.get(f'PROJ_{i}_URL', '')
     path      = os.environ[f'PROJ_{i}_PATH']
     cmds_file = os.environ[f'PROJ_{i}_CMDS_FILE']
     with open(cmds_file) as f:
         cmds = [line.rstrip() for line in f if line.strip()]
-    config['projects'][slug] = {
+    entry = {
         'secret':    secret,
         'repo_path': path,
         'commands':  cmds,
     }
+    if url:
+        entry['url'] = url
+    config['projects'][slug] = entry
 
 with open(os.environ['_CONFIG_FILE'], 'w') as f:
     json.dump(config, f, indent=2)
