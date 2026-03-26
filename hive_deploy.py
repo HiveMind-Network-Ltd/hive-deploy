@@ -85,13 +85,13 @@ def run_deploy(project_slug, project, config):
 
     logging.info(f'[{project_slug}] Deploy started')
 
-    start_lines = [f'*Host:* `{hostname}`', f'*Started:* {started}']
+    start_text = f'*Host:* `{hostname}`\n*Started:* {started}'
     if url:
-        start_lines.append(f'*URL:* {url}')
+        start_text += f'\n*URL:* {url}'
     rc_notify(
         config,
         f'🚀 `{project_slug}` — new deployment triggered',
-        '\n'.join(start_lines),
+        start_text,
     )
 
     steps_ok    = []
@@ -135,16 +135,14 @@ def run_deploy(project_slug, project, config):
         )
     else:
         steps_text = '\n'.join(f'✅ `{c}`' for c in steps_ok)
-        success_lines = [
-            f'*Host:* `{hostname}`  |  *Completed:* {_now()}',
-        ]
+        success_text = f'*Host:* `{hostname}`\n*Completed:* {_now()}'
         if url:
-            success_lines.append(f'*Live at:* {url}')
-        success_lines += ['', '*Commands run:*', steps_text]
+            success_text += f'\n*Live at:* {url}'
+        success_text += f'\n\n*Commands run:*\n{steps_text}'
         rc_notify(
             config,
             f'✅ `{project_slug}` — deployed successfully',
-            '\n'.join(success_lines),
+            success_text,
             color='good',
         )
         logging.info(f'[{project_slug}] Deploy complete')
